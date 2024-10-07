@@ -1,42 +1,77 @@
 // 1. SETUP BEGINS
 const express = require('express');
 const cors = require("cors");
-require('dotenv').config();
+const { ObjectId } = require("mongodb");
 const MongoClient = require("mongodb").MongoClient;
-const { ObjectId } = require("mongodb"); // Add this line to import ObjectId
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const verifyToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (!token) return res.sendStatus(403);
-    jwt.verify(token, process.env.TOKEN_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403);
-        req.user = user;
-        next();
-    });
-};
 
-const generateAccessToken = (id, email) => {
-    return jwt.sign({
-        'user_id': id,
-        'email': email
-    }, process.env.TOKEN_SECRET, {
-        expiresIn: "1h"
-    });
-};
-
-const mongoUri = process.env.MONGO_URI;
 const dbname = "recipe_book";
 
-let app = express();
+// // enable dotenv (allow Express application to read .env files)
+require('dotenv').config();
 
-// Enable processing JSON data
-app.use(express.json());
+// set the mongoUri to be MONGO_URI from the .env file
+// make sure to read data from process.env AFTER `require('dotenv').config()`
+const mongoUri = process.env.MONGO_URI;
 
+// function to generate an access token
+function generateAccessToken(id, email) {
+    // set the payload of the JWT (i.e, developers can add any data they want)
+    let payload = {
+        'user_id': id,
+        'email': email,
+    }
+
+    let token = jwt.sign(payload, process.env.TOKEN_SECRET, {
+        'expiresIn': '1h' // h for hour, d for days, m is for minutes and s is for seconds
+    });
+    return token;
+}
+
+// middleware: a function that executes before a route function. 
+function verifyToken(req, res, next) {
+    // get the JWT from the headers
+    let authHeader = req.headers['authorization'];
+    let token = null;
+    if (authHeader) {
+        // the token will be stored as in the header as:
+        // BEARER <JWT TOKEN>
+        token = authHeader.split(' ')[1];
+        if (token) {
+            // the callback function in the third parameter will be called after
+            // the token has been verified
+            jwt.verify(token, process.env.TOKEN_SECRET, function (err, payload) {
+                if (err) {
+                    console.error(err);
+                    return res.sendStatus(403);
+                }
+                // save the payload into the request
+                req.user = payload;
+                // call the next middleware or the route function
+                next();
+
+            })
+        } else {
+            return res.sendStatus(403);
+        }
+    } else {
+        return res.sendStatus(403);
+    }
+}
+
+// 1a. create the app
+const app = express();
 // Enable cors
 app.use(cors());
 
+// 1b. Enable processing JSON data
+app.use(express.json());
+
+// 1b. Enable cors
+app.use(cors());
+
+// uri = connection string
 async function connect(uri, dbname) {
     let client = await MongoClient.connect(uri, {
         useUnifiedTopology: true
@@ -45,14 +80,17 @@ async function connect(uri, dbname) {
     return db;
 }
 
-// SETUP END
+// 2. CREATE ROUTES.
+// All routes will be created in the 'main' function. 
 async function main() {
-    const db = await connect(mongoUri, dbname);
+    // connect to the Mongo database
+    let db = await connect(mongoUri, dbname);
 
     // GET route to fetch all recipes with query filters
-    app.get('/recipes', async (req, res) => {
+    app.get('/recipes', verifyToken, async (req, res) => {
         try {
-            const { tags, cuisine, ingredients, name } = req.query;
+            let { tags, cuisine, ingredients, name } = req.query;
+
             let query = {};
 
             if (tags) {
